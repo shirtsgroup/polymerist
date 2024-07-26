@@ -33,7 +33,8 @@ def num_substruct_queries(target_mol : Mol, substruct_query : Mol, *args, **kwar
 
 def num_automorphisms(substruct_query : Mol, *args, **kwargs) -> int:
     '''Get the matches a substructure query has to itself; provides measure of the degree of symmetry of the query'''
-    return num_substruct_queries(substruct_query, substruct_query, uniquify=False, *args, **kwargs) # !CRITICAL! that matches be non-unique
+    kwargs['uniquify'] = False # force non-unique match to see how many possible ways the atoms in the substruct can be mapped to themselves
+    return num_substruct_queries(substruct_query, substruct_query, *args, **kwargs)
 
 def num_substruct_queries_distinct(target_mol : Mol, substruct_query : Mol) -> int: # TODO : also include stereochemical symmetries (via "useChirality" flag) 
     '''Get the number of distinct, non-overlapping RDKit substruct matches to a SMARTS query within a given target Mol

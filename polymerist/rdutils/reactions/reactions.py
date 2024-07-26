@@ -16,8 +16,8 @@ from ..labeling.molwise import ordered_map_nums
 from ..labeling.bondwise import get_bonded_pairs_by_map_nums
 
 from ...genutils.decorators.functional import allow_string_paths, allow_pathlib_paths
-from ...genutils.sequences.choices import bin_ids_forming_sequence
-from ...smileslib.substructures import matching_labels_from_substruct_dict
+from ...genutils.sequences.discernment import DISCERNMENTSolver
+from ...smileslib.substructures import num_substruct_queries_distinct
 
 
 # REACTION INFORMATICS CLASSES
@@ -180,24 +180,38 @@ class AnnotatedReaction(rdChemReactions.ChemicalReaction):
         an ordering of the reactants which is compatible with the reactant templates defined in the reaction
 
         Returns the first found ordering, or NoneType if no such ordering exists'''
-        reactant_templates_by_index = {i : reac_templ for i, reac_templ in enumerate(self.GetReactants())}
-        num_reactants_in_mechanism = self.GetNumReactantTemplates() # = len(reactant_templates_by_index)
+        # 0) Preliminary quick check on number of reactants; can discount a bad reactant collection prior to more expensive check
         num_reactants_provided = len(reactants)
+        num_reactant_templates_in_mechanism = self.GetNumReactantTemplates()
 
-        # preliminary (quick) check; are there the right number of Mols
-        if num_reactants_provided != num_reactants_in_mechanism:
-            raise BadNumberReactants(f'{self.__class__.__name__} expected {num_reactants_in_mechanism} reactants, but {num_reactants_provided} were provided')
+        if num_reactants_provided != num_reactant_templates_in_mechanism:
+            raise BadNumberReactants(f'{self.__class__.__name__} expected {num_reactant_templates_in_mechanism} reactants, but {num_reactants_provided} were provided')
 
-        # if number of fragments is correct, perform more complex subset choice evaluation
-        possible_fragment_orderings = bin_ids_forming_sequence( # generates all possible orders of the fragments which match the expected reactant templates for the reaction
-            sequence=reactant_templates_by_index.keys(),
-            choice_bins = ( # generator (rather than list) comprehension will suffice here, since there is no need to reuse these bins
-                matching_labels_from_substruct_dict(reactant, reactant_templates_by_index)
-                    for reactant in reactants
-            ),
-            unique_bins=True
-        )
-        try:
-            return [reactants[i] for i in next(possible_fragment_orderings)] # get first valid ordering
-        except StopIteration:
-            return None # slightly verbose, but prefer to be explicit here
+        # if number of fragments is correct, perform more complex of whether a molecule-unique substructure selection exists
+        ## 1) Pre-compilation of template substructure indices
+        reactant_template_indices : list[int] = [templ_idx for templ_idx in range(num_reactant_templates_in_mechanism)]
+        reactant_templates_by_index : dict[int, Mol] = {
+            templ_idx : self.GetReactantTemplate(templ_idx)
+                for templ_idx in reactant_template_indices
+        }
+
+        template_substruct_ids_by_reactant_ids : dict[int, list[int]] = { 
+            react_idx : [ # associate with each reactant a substructure "word"...
+                templ_idx # ... consisting of the indices of reactant template indices present as substructure(s) in the reactant...
+                    for templ_idx, react_templ in reactant_templates_by_index.items()
+                        for _ in range(num_substruct_queries_distinct(reactant, react_templ)) # ...which appear as many times as the substructure is uniquely present
+            ]
+                for react_idx, reactant in enumerate(reactants)
+        } # TOSELF: implemented this w/ indices (rather than directly using Mols, which are hashable) because the same mol might return distinct hashes (cannot evaluate self-equality via __eq__ directly)
+
+        ## 2) Choice-finding to see if a selection of reactants matching the templates exists
+        reactant_ordering_planner = DISCERNMENTSolver(template_substruct_ids_by_reactant_ids)
+
+        if reactant_ordering_planner.solution_exists(reactant_template_indices, unique_bins=True):
+            reactant_ordering : tuple[int] = next(reactant_ordering_planner.enumerate_choices(
+                word=reactant_template_indices,
+                unique_bins=True) # need to have unique bins so a single reactant is not taken more than once
+            )
+            return [reactants[i] for i in reactant_ordering] # get first valid ordering
+        else: # NOTE: this else clause is not strictly necessary (would otherwise return None anyway), but prefer to have it for explicitness
+            return None 
